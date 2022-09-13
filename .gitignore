@@ -1,0 +1,10 @@
+*.swp
+.vscode/
+package-lock.json
+__pycache__
+.pytest_cache
+.venv
+*.egg-info
+**/data/*
+*.ipynb*
+images/*.png

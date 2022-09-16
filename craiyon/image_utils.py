@@ -4,23 +4,24 @@ import numpy as np
 import cv2
 from pathlib import Path
 import logging
+import colorsys
 
 logger = logging.getLogger(__name__)
 
 
 class Color:
 
+    # Opencv has BGR, not RGB
+
     white = (255, 255, 255)
-    red = (205, 0, 26)
-    dark_red = (139, 0, 0)
-    green = (0, 255, 23)
-    dark_green = (0, 139, 10)
-
-    blue = (46, 103, 248)
-    light_blue = (13, 250, 230)
-
-    yellow = (246, 250, 0)
-    dark_yellow = (255, 205, 0)
+    red = (26, 0, 205)
+    dark_red = (0, 0, 139)
+    green = (23, 255, 0)
+    dark_green = (10, 139, 0)
+    blue = (248, 103, 46)
+    light_blue = (230, 250, 13)
+    yellow = (0, 250, 246)
+    dark_yellow = (0, 205, 255)
 
     @classmethod
     def range(cls, _from, _to, steps):
@@ -45,10 +46,10 @@ class Color:
     def color_couples(cls):
 
         couples = [
+            (cls.light_blue, cls.blue),
             (cls.yellow, cls.dark_yellow),
             (cls.red, cls.dark_red),
             (cls.green, cls.dark_green),
-            (cls.light_blue, cls.blue),
         ]
 
         for element in couples:
@@ -117,6 +118,13 @@ class ImageTransformer:
         if colors is None:
             colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
 
+        def lighness(rgb):
+            return colorsys.rgb_to_hls(rgb[0], rgb[1], rgb[2])[1]
+
+        # we sort colors (and thus layers)
+        # by lightness. We want to write light layers first.
+        colors = sorted(colors, key=lighness)
+
         layers = []
         for i, color in enumerate(colors):
             if np.array_equal(color, background):
@@ -165,10 +173,16 @@ class ImageProcessor:
         _image = np.copy(self.image)
         while len(contours) > 1:
             contours, hierarchy = self.external_contours(_image)
+            contours = [self.smooth_contour(contour) for contour in contours]
             all_contours.append(contours)
             _image = self.remove_contours(_image, contours, width=pen_width)
 
         return all_contours
+
+    def smooth_contour(self, contour, factor=0.001):
+        # smooth contour
+        epsilon = factor * cv2.arcLength(contour, True)
+        return cv2.approxPolyDP(contour, epsilon, True)
 
     def visualize_drawing_lines(
         self, contours_list, image=None, _from=Color.red, _to=Color.blue
@@ -200,16 +214,22 @@ if __name__ == "__main__":
 
     # save_color_clusters(quantized_image, colors, output_folder="images")
 
-    layers = ImageTransformer.extract_layers("images\kmeans3.png")
+    layers = ImageTransformer.extract_layers("images\\kmeans3.png")
     for i, layer in enumerate(layers):
         cv2.imwrite(f"images\layer_{i}.png", layer)
 
-    c_img = np.zeros(layers[0].shape, dtype=np.uint8)
-    c_img.fill(255)
-    for image, color in zip(layers, Color.color_couples()):
-        processor = ImageProcessor(image)
-        drawing_lines = processor.compute_drawing_lines()
-        c_img = processor.visualize_drawing_lines(
-            drawing_lines, _from=color[0], _to=color[1], image=c_img
-        )
-    cv2.imwrite("images\drawing_lines_3.png", c_img)
+    import pickle
+
+    drawing_lines = ImageProcessor(layers[0]).compute_drawing_lines()
+    with open("drawing_lines.pkl", "wb") as handle:
+        pickle.dump(drawing_lines, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # c_img = np.zeros(layers[0].shape, dtype=np.uint8)
+    # c_img.fill(255)
+    # for image, color in zip(layers, Color.color_couples()):
+    #     processor = ImageProcessor(image)
+    #     drawing_lines = processor.compute_drawing_lines()
+    #     c_img = processor.visualize_drawing_lines(
+    #         drawing_lines, _from=color[0], _to=color[1], image=c_img
+    #     )
+    # cv2.imwrite("images\drawing_lines_3.png", c_img)

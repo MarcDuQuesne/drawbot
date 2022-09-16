@@ -3,14 +3,56 @@ from PIL import Image
 import numpy as np
 import cv2
 from pathlib import Path
-from colour import Color
-red = Color("red")
-
 import logging
 
 logger = logging.getLogger(__name__)
 
-WHITE = (255, 255, 255)
+
+class Color:
+
+    white = (255, 255, 255)
+    red = (205, 0, 26)
+    dark_red = (139, 0, 0)
+    green = (0, 255, 23)
+    dark_green = (0, 139, 10)
+
+    blue = (46, 103, 248)
+    light_blue = (13, 250, 230)
+
+    yellow = (246, 250, 0)
+    dark_yellow = (255, 205, 0)
+
+    @classmethod
+    def range(cls, _from, _to, steps):
+
+        _from = np.array(_from)
+        _to = np.array(_to)
+        step = (_to - _from) / steps
+
+        for i in range(steps):
+            color = _from + i * step
+            yield int(color[0]), int(color[1]), int(color[2])
+
+    @classmethod
+    def list(cls):
+        colors = [
+            v for v, m in vars(Color).items() if not (v.startswith("_") or callable(m))
+        ]
+        for color in colors:
+            yield getattr(cls, color)
+
+    @classmethod
+    def color_couples(cls):
+
+        couples = [
+            (cls.yellow, cls.dark_yellow),
+            (cls.red, cls.dark_red),
+            (cls.green, cls.dark_green),
+            (cls.light_blue, cls.blue),
+        ]
+
+        for element in couples:
+            yield element
 
 
 class ImageTransformer:
@@ -31,7 +73,7 @@ class ImageTransformer:
         return ImageLoader._process_image_to_save(pred)
 
     @classmethod
-    def quantize(cls, image, K=4, background_color_to=WHITE, output_file=None):
+    def quantize(cls, image, K=4, background_color_to=Color.white, output_file=None):
         """
         Group pixels in K clusters of color.
         """
@@ -66,9 +108,33 @@ class ImageTransformer:
 
         return quantized_image, center
 
+    @classmethod
+    def extract_layers(cls, image, colors=None, background=Color.white):
+
+        if isinstance(image, Path) or isinstance(image, str):
+            image = cv2.imread(image)
+
+        if colors is None:
+            colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
+
+        layers = []
+        for i, color in enumerate(colors):
+            if np.array_equal(color, background):
+                continue
+
+            mask = cv2.inRange(image, color, color)
+            masked = cv2.bitwise_and(image, image, mask=mask)
+            black_pixels = np.where(
+                (masked[:, :, 0] == 0) & (masked[:, :, 1] == 0) & (masked[:, :, 2] == 0)
+            )
+            # set those pixels to white
+            masked[black_pixels] = background
+            layers.append(masked)
+
+        return layers
+
 
 class ImageProcessor:
-
     def __init__(self, image):
         if isinstance(image, Path) or isinstance(image, str):
             image = cv2.imread(image)
@@ -80,13 +146,10 @@ class ImageProcessor:
 
         imgray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, thresh = cv2.threshold(imgray, 200, 255, 0)
-        return cv2.findContours(
-            thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-        )
-
+        return cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     @staticmethod
-    def remove_contours(image, contours, background_color=WHITE, width=5):
+    def remove_contours(image, contours, background_color=Color.white, width=5):
         _image = np.copy(image)
         return cv2.drawContours(_image, contours, -1, background_color, width)
 
@@ -95,8 +158,10 @@ class ImageProcessor:
         Takes one of the quantized images, and computes a trajectory based on contours for the pen to follow, given a pen width (in pixels), so to fill each area with color.
         """
 
+        # TODO the borders of the layers coincide.
+
         all_contours = []
-        contours = [[1],[2]]
+        contours = [[1], [2]]
         _image = np.copy(self.image)
         while len(contours) > 1:
             contours, hierarchy = self.external_contours(_image)
@@ -105,44 +170,19 @@ class ImageProcessor:
 
         return all_contours
 
-    def visualize_drawing_lines(self, contours_list, image=None, _from=None, _to=None):
+    def visualize_drawing_lines(
+        self, contours_list, image=None, _from=Color.red, _to=Color.blue
+    ):
         """
         Creates a visualization for the contours.
         """
 
-        c_image = image or np.zeros(self.image.shape, dtype=np.uint8)
-        _from = _from or Color('red')
-        _to = _to or Color('green')
-        c_image.fill(255)
-        colors = _from.range_to(_to, len(contours_list))
-        for contour in contours_list:
-            _color = tuple([int(255 * x) for x in next(colors).rgb])
-            c_image = cv2.drawContours(c_image, contour, -1, _color, 1)
+        for contour, color in zip(
+            contours_list, Color.range(_from, _to, len(contours_list))
+        ):
+            image = cv2.drawContours(image, contour, -1, color, 1)
 
-        return c_image
-
-
-def save_color_clusters(image, colors, background=WHITE, output_folder=None):
-
-    if isinstance(output_folder, str):
-        output_folder = Path(output_folder)
-
-    color_clusters = []
-    for i, color in enumerate(colors):
-        if np.array_equal(color, background):
-            continue
-
-        mask = cv2.inRange(image, color, color)
-        masked = cv2.bitwise_and(image, image, mask=mask)
-        black_pixels = np.where(
-            (masked[:, :, 0] == 0) & (masked[:, :, 1] == 0) & (masked[:, :, 2] == 0)
-        )
-        # set those pixels to white
-        masked[black_pixels] = background
-
-        if output_folder:
-            cv2.imwrite((output_folder / f"{i}.png").as_posix(), masked)
-        color_clusters.append(mask)
+        return image
 
 
 if __name__ == "__main__":
@@ -160,7 +200,16 @@ if __name__ == "__main__":
 
     # save_color_clusters(quantized_image, colors, output_folder="images")
 
-    processor = ImageProcessor('images/3.png')
-    drawing_lines = processor.compute_drawing_lines()
-    c_img = processor.visualize_drawing_lines(drawing_lines,_from=Color('yellow'), _to=Color('red'))
+    layers = ImageTransformer.extract_layers("images\kmeans3.png")
+    for i, layer in enumerate(layers):
+        cv2.imwrite(f"images\layer_{i}.png", layer)
+
+    c_img = np.zeros(layers[0].shape, dtype=np.uint8)
+    c_img.fill(255)
+    for image, color in zip(layers, Color.color_couples()):
+        processor = ImageProcessor(image)
+        drawing_lines = processor.compute_drawing_lines()
+        c_img = processor.visualize_drawing_lines(
+            drawing_lines, _from=color[0], _to=color[1], image=c_img
+        )
     cv2.imwrite("images\drawing_lines_3.png", c_img)

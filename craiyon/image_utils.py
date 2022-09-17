@@ -5,6 +5,7 @@ import cv2
 from pathlib import Path
 import logging
 import colorsys
+from baffi.decorators.log_helpers import timeit
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,9 @@ class ImageTransformer:
 
 class ImageProcessor:
     def __init__(self, image):
+
         if isinstance(image, Path) or isinstance(image, str):
+            logger.info(f"Reading {image}.")
             image = cv2.imread(image)
 
         self.image = image
@@ -154,6 +157,9 @@ class ImageProcessor:
 
         imgray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         ret, thresh = cv2.threshold(imgray, 200, 255, 0)
+        # The function cv::findContours describes the contour of areas consisting of ones.
+        # The areas in which we are interested are black, though.
+        thresh = 255 - thresh
         return cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     @staticmethod
@@ -161,10 +167,14 @@ class ImageProcessor:
         _image = np.copy(image)
         return cv2.drawContours(_image, contours, -1, background_color, width)
 
-    def compute_drawing_lines(self, pen_width=10):
+    @timeit
+    def compute_drawing_lines(self, pen_width=10, smoothing_factor=0.001):
         """
         Takes one of the quantized images, and computes a trajectory based on contours for the pen to follow, given a pen width (in pixels), so to fill each area with color.
         """
+
+        logger.info(f"Computing drawing lines with width: {pen_width} pixels.")
+        logger.debug(f"Smoothing factor {smoothing_factor}")
 
         # TODO the borders of the layers coincide.
 
@@ -173,15 +183,17 @@ class ImageProcessor:
         _image = np.copy(self.image)
         while len(contours) > 1:
             contours, hierarchy = self.external_contours(_image)
-            contours = [self.smooth_contour(contour) for contour in contours]
+            contours = [
+                self.smooth_contour(contour, smoothing_factor) for contour in contours
+            ]
             all_contours.append(contours)
             _image = self.remove_contours(_image, contours, width=pen_width)
 
         return all_contours
 
-    def smooth_contour(self, contour, factor=0.001):
+    def smooth_contour(self, contour, smoothing_factor=0.001):
         # smooth contour
-        epsilon = factor * cv2.arcLength(contour, True)
+        epsilon = smoothing_factor * cv2.arcLength(contour, True)
         return cv2.approxPolyDP(contour, epsilon, True)
 
     def visualize_drawing_lines(

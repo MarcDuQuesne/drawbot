@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 import logging
 
-# import potrace
-
 
 logger = logging.getLogger("CrayionAPI")
 
@@ -52,14 +50,6 @@ class ImageUtil:
             im = Image.open(image)
             fileName = f"{base_name}-{i}.{format}"
             im.save(directory / fileName)
-
-    @classmethod
-    def to_svg(cls, image):
-
-        # Create a bitmap from the array
-        bmp = potrace.Bitmap(image)
-        # Trace the bitmap to a path
-        return bmp.trace()
 
 
 def call_api():

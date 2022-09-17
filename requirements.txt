@@ -3,3 +3,4 @@ requests
 # pypotrace  $ sudo apt-get install build-essential python-dev libagg-dev libpotrace-dev pkg-config
 opencv-python
 pyserial
+git+https://github.com/MarcDuQuesne/baffi.git

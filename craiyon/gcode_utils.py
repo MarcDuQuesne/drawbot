@@ -4,11 +4,28 @@ import serial
 import time
 from typing import List
 import logging
+from baffi.decorators.log_helpers import log_wrapper
+from baffi.metaclasses.autodecorator import apply_to_each_function
 
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(__name__)
+GCODE_LOG_LEVEL = logging.DEBUG - 5
+logging.addLevelName(GCODE_LOG_LEVEL, "GCODE")
+logging.GCODE = GCODE_LOG_LEVEL
 
 
-class GCodeCommands:
+def debugv(self, message, *args, **kws):
+    # Yes, logger takes its '*args' as 'args'.
+    self._log(GCODE_LOG_LEVEL, message, args, **kws)
+
+
+logging.Logger.debugv = debugv
+
+
+class GCodeCommands(
+    metaclass=apply_to_each_function(
+        log_wrapper(post_format="{result}", level=logging.GCODE)
+    )
+):
     @classmethod
     def circular_go_to(self, point, scale):
         # G02/G03 X12.5 Y14.7 I1.0 J2.0 F0.2;
@@ -48,8 +65,6 @@ class GCodeCommands:
         return "M2"
 
 
-
-
 class GCodeTransformer:
 
     _header = [
@@ -76,16 +91,20 @@ class GCodeTransformer:
         self._msg = []
 
     def contours_to_gcode(self, contours, scale):
+        logger.debug(f"Transforming: {len(contours)} contours to gcode.")
         for path_id, path in enumerate(contours):
             for contour_id, contour in enumerate(path):
                 # cnt = contour[0].reshape(contour[0].shape[0], contour[0].shape[2])
-                self._contour_to_gcode(contour, scale, f"{path_id}_{contour_id}")
+                contour_id = f"{path_id}_{contour_id}"
+                self._contour_to_gcode(contour, scale, contour_id)
         return self.msg
 
-    def _contour_to_gcode(self, contour, scale, path_id):
+    def _contour_to_gcode(self, contour, scale, contour_id):
+
+        logger.debug(f"Contour id {contour_id}: {len(contour)} points.")
 
         self._msg.append("")
-        self._msg.append(f"(Start cutting path id: path{path_id})")
+        self._msg.append(f"(Start cutting path id: path{contour_id})")
         self._msg.append("(Change tool to Default tool)")
         self._msg.append("")
         self._msg.append(GCodeCommands.fast_go_to(contour[0][0] / scale))
@@ -95,12 +114,14 @@ class GCodeTransformer:
             self._msg.append(GCodeCommands.linear_go_to(point[0] / scale))
         self._msg.append("")
         self._msg.append(GCodeCommands.pen_up())
-        self._msg.append(f"(End cutting path id: path{path_id})")
+        self._msg.append(f"(End cutting path id: path{contour_id})")
         self._msg.append("")
 
     @property
     def msg(self):
-        return self._header + self._msg + self._footer
+        _msg = self._header + self._msg + self._footer
+        logger.info(f"Length of the message: {len(_msg)}")
+        return _msg
 
 
 class GCodeSender:
@@ -109,7 +130,7 @@ class GCodeSender:
 
     def send(self, msg: List[str]):
 
-        self.serial.write("\r\n\r\n")
+        self.serial.write("\r\n\r\n".encode())
         time.sleep(2)  # Wait for Printrbot to initialize
         self.serial.flushInput()  # Flush startup text in serial input
 
@@ -120,7 +141,7 @@ class GCodeSender:
         for line in msg:
             if iscomment(line) or len(line) == 0:
                 continue
-            self.serial.write(line + "\n")  # Send g-code block
+            self.serial.write((line + "\n").encode())  # Send g-code block
             grbl_out = self.serial.readline()  # Wait for response with carriage return
 
         # Close file and serial port
@@ -132,6 +153,9 @@ class GCodeSender:
 if __name__ == "__main__":
 
     import pickle
+    import logging
+
+    logging.basicConfig(level=logging.DEBUG)
 
     with open("drawing_lines.pkl", "rb") as handle:
         contours = pickle.load(handle)

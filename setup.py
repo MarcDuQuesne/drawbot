@@ -13,7 +13,7 @@ setup(
     author="Matteo Giani",
     author_email="matteo.giani.87@gmail.com",
     version="0.0.1",
-    install_requires=requirements(),
+    install_requires=requirements("requirements.txt"),
     tests_require=requirements("requirements_tests.txt"),
     extras_require={
         "dev": requirements("requirements_dev.txt"),

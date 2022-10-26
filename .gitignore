@@ -9,4 +9,4 @@ __pycache__
 *.ipynb*
 images/*.png
 build
-**/*.FCStd*
+**/*.FCStd+

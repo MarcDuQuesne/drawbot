@@ -144,7 +144,7 @@ class ImageTransformer:
 
 
 class ImageProcessor:
-    def __init__(self, image):
+    def __init__(self, image = None):
 
         if isinstance(image, Path) or isinstance(image, str):
             logger.info(f"Reading {image}.")
@@ -168,7 +168,7 @@ class ImageProcessor:
         return cv2.drawContours(_image, contours, -1, background_color, width)
 
     @timeit
-    def compute_drawing_lines(self, pen_width=10, smoothing_factor=0.001):
+    def compute_drawing_lines(self, pen_width, smoothing_factor=0.001):
         """
         Takes one of the quantized images, and computes a trajectory based on contours for the pen to follow, given a pen width (in pixels), so to fill each area with color.
         """
@@ -197,7 +197,7 @@ class ImageProcessor:
         return cv2.approxPolyDP(contour, epsilon, True)
 
     def visualize_drawing_lines(
-        self, contours_list, image=None, _from=Color.red, _to=Color.blue
+        self, contours_list, pen_width, image=None, _from=Color.red, _to=Color.blue,
     ):
         """
         Creates a visualization for the contours.
@@ -206,42 +206,32 @@ class ImageProcessor:
         for contour, color in zip(
             contours_list, Color.range(_from, _to, len(contours_list))
         ):
-            image = cv2.drawContours(image, contour, -1, color, 1)
+            image = cv2.drawContours(image, contour, -1, color, pen_width)
 
         return image
 
+    def draw_drawing_lines(self, pen_width):
 
-if __name__ == "__main__":
+        c_img = np.zeros(self.image.shape, dtype=np.uint8)
+        c_img.fill(255)
 
-    logging.basicConfig(
-        level=logging.DEBUG, format="%(name)s.%(funcName)s | %(message)s"
-    )
+        color = Color.color_couples()
+        drawing_lines = self.compute_drawing_lines(pen_width=pen_width)
+        c_img = self.visualize_drawing_lines(
+            drawing_lines, _from=Color.red, _to=Color.red, image=c_img, pen_width=pen_width
+        )
+        return c_img
 
-    # enhanced_image = ImageTransformer.enhance(
-    #     image="images\dutch tile with insects-6.png"
-    # )
+    def draw_all_drawing_lines(self, layers, pen_width):
 
-    # quantized_image, colors = ImageTransformer.quantize(enhanced_image, K=4)
-    # cv2.imwrite("images\kmeans3.png", quantized_image)
+        c_img = np.zeros(layers[0].shape, dtype=np.uint8)
+        c_img.fill(255)
+        for image, color in zip(layers, Color.color_couples()):
+            self.image=image
+            drawing_lines = self.compute_drawing_lines(pen_width=pen_width)
+            c_img = self.visualize_drawing_lines(
+                drawing_lines, _from=color[0], _to=color[1], image=c_img, pen_width=pen_width
+            )
 
-    # save_color_clusters(quantized_image, colors, output_folder="images")
-
-    layers = ImageTransformer.extract_layers("images\\kmeans3.png")
-    for i, layer in enumerate(layers):
-        cv2.imwrite(f"images\layer_{i}.png", layer)
-
-    import pickle
-
-    drawing_lines = ImageProcessor(layers[0]).compute_drawing_lines()
-    with open("drawing_lines.pkl", "wb") as handle:
-        pickle.dump(drawing_lines, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # c_img = np.zeros(layers[0].shape, dtype=np.uint8)
-    # c_img.fill(255)
-    # for image, color in zip(layers, Color.color_couples()):
-    #     processor = ImageProcessor(image)
-    #     drawing_lines = processor.compute_drawing_lines()
-    #     c_img = processor.visualize_drawing_lines(
-    #         drawing_lines, _from=color[0], _to=color[1], image=c_img
-    #     )
-    # cv2.imwrite("images\drawing_lines_3.png", c_img)
+        return c_img
+    

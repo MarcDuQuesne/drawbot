@@ -4,4 +4,19 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "Readme.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "baffi",
+    "opencv-python>=4.12.0.88",
+    "super-image>=0.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.6",
+]
+test = [
+    "pytest>=9.0.1",
+]
+
+[tool.uv.sources]
+baffi = { git = "https://github.com/MarcDuQuesne/baffi.git" }

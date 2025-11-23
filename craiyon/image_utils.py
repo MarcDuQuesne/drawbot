@@ -1,3 +1,4 @@
+from fileinput import filename
 from super_image import EdsrModel, ImageLoader
 from PIL import Image
 import numpy as np
@@ -6,23 +7,31 @@ from pathlib import Path
 import logging
 import colorsys
 from baffi.decorators.log_helpers import timeit
+from potrace import Bitmap, POTRACE_TURNPOLICY_MINORITY
+from svgpathtools import svg2paths, smoothed_path, wsvg
 
 logger = logging.getLogger(__name__)
-
 
 class Color:
 
     # Opencv has BGR, not RGB
 
     white = (255, 255, 255)
-    red = (26, 0, 205)
+    red = (40, 40, 200)
     dark_red = (0, 0, 139)
     green = (23, 255, 0)
     dark_green = (10, 139, 0)
     blue = (248, 103, 46)
     light_blue = (230, 250, 13)
-    yellow = (0, 250, 246)
+    yellow = (20, 220, 250)
     dark_yellow = (0, 205, 255)
+    black = (0, 0, 0)
+    dark_yellow = (0, 235, 255)
+    orange = (0, 120, 255)
+    pink = (150, 90, 255)
+    purple = (120, 40, 150)
+    other_blue = (120, 80, 20)
+    brown = (60, 80, 100)
 
     @classmethod
     def range(cls, _from, _to, steps):
@@ -56,7 +65,21 @@ class Color:
         for element in couples:
             yield element
 
-
+    @classmethod
+    def stabilo_88(cls):
+        return [
+            cls.yellow,
+            cls.orange,
+            cls.red,
+            cls.pink,
+            cls.purple,
+            cls.blue,
+            cls.green,
+            cls.dark_green,
+            cls.brown,
+            cls.black,
+        ]
+    
 class ImageTransformer:
     @classmethod
     def enhance(cls, image, scale=4, output_file: Path = None):
@@ -81,7 +104,7 @@ class ImageTransformer:
         """
 
         if isinstance(image, Path) or isinstance(image, str):
-            image = cv2.imread(image)
+            image = cv2.imread(image.as_posix())
 
         Z = image.reshape((-1, 3))
         # convert to np.float32
@@ -109,6 +132,79 @@ class ImageTransformer:
         quantized_image = res.reshape((image.shape))
 
         return quantized_image, center
+
+    @classmethod
+    def quantize_to_palette(cls, image: np.ndarray, palette_bgr: np.ndarray) -> np.ndarray:
+        """
+        img_bgr: HxWx3 uint8 image in BGR (OpenCV default)
+        palette_bgr: Kx3 uint8 or float32 array of colors in BGR
+        """
+
+        if isinstance(image, Path) or isinstance(image, str):
+            image = cv2.imread(image)
+
+        # Ensure correct dtypes
+        img = image.astype(np.int32)  # avoid overflow in subtraction
+        palette = palette_bgr.astype(np.int32)
+
+        h, w, c = img.shape
+        pixels = img.reshape(-1, 3)  # (N, 3), N = H*W
+
+        # Compute squared distances to each palette color
+        # pixels[:, None, :] -> (N, 1, 3)
+        # palette[None, :, :] -> (1, K, 3)
+        # diff -> (N, K, 3)
+        diff = pixels[:, None, :] - palette[None, :, :]  # broadcast
+        dist2 = np.sum(diff * diff, axis=2)              # (N, K)
+
+        # For each pixel, pick index of closest palette color
+        nearest_idx = np.argmin(dist2, axis=1)           # (N,)
+
+        # Map indices back to palette colors
+        quantized_pixels = palette[nearest_idx]          # (N, 3)
+
+        # Reshape to original image
+        quantized_img = quantized_pixels.reshape(h, w, 3).astype(np.uint8)
+        return quantized_img
+
+    @classmethod
+    def extract_palette(cls, image, K=4):
+        """
+        Extract the K most prominent colors from an image.
+        """
+
+        if isinstance(image, Path) or isinstance(image, str):
+            image = cv2.imread(image)
+
+        Z = image.reshape((-1, 3))
+        # convert to np.float32
+        Z = np.float32(Z)
+        # define criteria, number of clusters(K) and apply kmeans()
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        ret, label, center = cv2.kmeans(
+            Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS
+        )
+
+        return np.uint8(center)
+
+    @classmethod
+    def to_monocolor(cls, image, color=Color.black, threshold=128, background=Color.white):
+        """
+        Convert an image to black and white based on a threshold.
+        """
+
+        if isinstance(image, Path) or isinstance(image, str):
+            image = cv2.imread(image)
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _, bw_image = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+
+        if color != Color.black:
+            colored_image = np.zeros_like(image)
+            colored_image[bw_image == 0] = color
+
+        colored_image[bw_image == 255] = background
+        return colored_image
 
     @classmethod
     def extract_layers(cls, image, colors=None, background=Color.white):
@@ -155,10 +251,40 @@ class ImageProcessor:
     @classmethod
     def external_contours(cls, image):
 
+        # # We assume the image has only one color and a white background.
+        # # Ensure image is BGR (drop alpha channel if present)
+        # if image.ndim == 3 and image.shape[2] == 4:
+        #     image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+        # # Flatten pixels and find unique colors
+        # pixels = image.reshape(-1, 3)
+        # unique_colors = np.unique(pixels, axis=0)
+
+        # # Consider near-white as background to tolerate compression artifacts
+        # white_thresh = 250
+        # is_white = np.all(unique_colors >= white_thresh, axis=1)
+        # white_colors = unique_colors[is_white]
+        # non_white_colors = unique_colors[~is_white]
+
+        # # Validate presence of white background
+        # if white_colors.size == 0:
+        #     raise ValueError("Image must have a white background (no near-white pixels found)")
+
+        # # Validate there is exactly one non-background color
+        # if non_white_colors.size == 0:
+        #     raise ValueError("Image contains only white background (no colored pixels found)")
+        # if non_white_colors.shape[0] > 1:
+        #     logger.debug(f"Unique non-white colors found: {non_white_colors}")
+        #     raise ValueError(
+        #     f"Image must contain exactly one non-background color. Found {non_white_colors.shape[0]} distinct non-white colors."
+        #     )
+
+        # convert to CV_8UC1 images
+
         imgray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        ret, thresh = cv2.threshold(imgray, 200, 255, 0)
-        # The function cv::findContours describes the contour of areas consisting of ones.
-        # The areas in which we are interested are black, though.
+        ret, thresh = cv2.threshold(imgray, 254, 255, 0)
+        # # The function cv::findContours describes the contour of areas consisting of ones.
+        # # The areas in which we are interested are black, though.
         thresh = 255 - thresh
         return cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -197,41 +323,71 @@ class ImageProcessor:
         return cv2.approxPolyDP(contour, epsilon, True)
 
     def visualize_drawing_lines(
-        self, contours_list, pen_width, image=None, _from=Color.red, _to=Color.blue,
+        self, contours_list, image=None, color=Color.black, pen_width=1
     ):
         """
         Creates a visualization for the contours.
         """
 
-        for contour, color in zip(
-            contours_list, Color.range(_from, _to, len(contours_list))
-        ):
-            image = cv2.drawContours(image, contour, -1, color, pen_width)
+        if image is None:
+            image = np.zeros(self.image.shape, dtype=np.uint8)
+            image.fill(255)
+
+        for contour in contours_list:
+            image = cv2.drawContours(image, contour, -1, color, 1)
 
         return image
 
-    def draw_drawing_lines(self, pen_width):
+    def export_svg(self, filename: str, output_file: Path):
 
-        c_img = np.zeros(self.image.shape, dtype=np.uint8)
-        c_img.fill(255)
-
-        color = Color.color_couples()
-        drawing_lines = self.compute_drawing_lines(pen_width=pen_width)
-        c_img = self.visualize_drawing_lines(
-            drawing_lines, _from=Color.red, _to=Color.red, image=c_img, pen_width=pen_width
+        try:
+            image = Image.open(filename)
+        except IOError:
+            print("Image (%s) could not be loaded." % filename)
+            return
+        bm = Bitmap(image, blacklevel=1)
+        # bm.invert()
+        plist = bm.trace(
+            turdsize=2,
+            turnpolicy=POTRACE_TURNPOLICY_MINORITY,
+            alphamax=1,
+            opticurve=False,
+            opttolerance=0.2,
         )
-        return c_img
+        with open(output_file.as_posix(), "w") as fp:
+            fp.write(
+                f'''<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{image.width}" height="{image.height}" viewBox="0 0 {image.width} {image.height}">''')
+            parts = []
+            for curve in plist:
+                fs = curve.start_point
+                parts.append(f"M{fs.x},{fs.y}")
+                for segment in curve.segments:
+                    if segment.is_corner:
+                        a = segment.c
+                        b = segment.end_point
+                        parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
+                    else:
+                        a = segment.c1
+                        b = segment.c2
+                        c = segment.end_point
+                        parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
+                parts.append("z")
+            fp.write(f'<path stroke="none" fill="black" fill-rule="evenodd" d="{"".join(parts)}"/>')
+            fp.write("</svg>")
+        logger.info(f"SVG saved to {filename}.svg")
 
-    def draw_all_drawing_lines(self, layers, pen_width):
+    def optimize_svg(self, input_file: Path, output_file: Path):
+        """
+        Optimize SVG file size.
+        """
+        # Load SVG paths
+        paths, attributes = svg2paths(input_file.as_posix())
 
-        c_img = np.zeros(layers[0].shape, dtype=np.uint8)
-        c_img.fill(255)
-        for image, color in zip(layers, Color.color_couples()):
-            self.image=image
-            drawing_lines = self.compute_drawing_lines(pen_width=pen_width)
-            c_img = self.visualize_drawing_lines(
-                drawing_lines, _from=color[0], _to=color[1], image=c_img, pen_width=pen_width
-            )
+        # Smooth each path
+        smoothed_paths = [smoothed_path(path) for path in paths if path.iscontinuous()]
 
-        return c_img
-    
+        # Save the smoothed paths to a new SVG file
+        wsvg(smoothed_paths, filename=output_file.as_posix())
+
+
+

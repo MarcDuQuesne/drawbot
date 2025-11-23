@@ -3,5 +3,6 @@ requests
 # pypotrace  $ sudo apt-get install build-essential python-dev libagg-dev libpotrace-dev pkg-config
 opencv-python
 pyserial
-baffi @ git+https://github.com/MarcDuQuesne/baffi.git
-# super-image>=0.1.6
+baffi@git+https://github.com/MarcDuQuesne/baffi.git
+# git+https://github.com/pjpscriv/py-svg2gcode.git
+super-image>=0.1.6

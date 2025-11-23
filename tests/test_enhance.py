@@ -1,4 +1,4 @@
-    
+
 from turtle import color
 import pytest
 from craiyon.image_utils import ImageTransformer, ImageProcessor, Color
@@ -8,7 +8,7 @@ from PIL import Image
 from svg_to_gcode.svg_parser import parse_file
 from svg_to_gcode.compiler import Compiler, interfaces
 from svg_to_gcode.formulas import linear_map
-import numpy as np 
+import numpy as np
 
 IMAGES = Path(__file__).parent.parent / "images"
 
@@ -18,9 +18,9 @@ IMAGES = Path(__file__).parent.parent / "images"
         Path(IMAGES / "1.original" / "crab.png"),
         Path(IMAGES / "1.original" / "scarab.png"),
     ],
-) 
+)
 def test_enhance(imagepath: Path):
-    
+
     scale = 4
 
     enhanced_image = ImageTransformer.enhance(
@@ -29,7 +29,7 @@ def test_enhance(imagepath: Path):
     )
 
     root = imagepath.stem
-    cv2.imwrite((IMAGES / "2.enhanced" / f"{root}_{scale}x.png").as_posix(), enhanced_image) 
+    cv2.imwrite((IMAGES / "2.enhanced" / f"{root}_{scale}x.png").as_posix(), enhanced_image)
 
 @pytest.mark.parametrize(
     "imagepath",
@@ -37,7 +37,7 @@ def test_enhance(imagepath: Path):
         Path(IMAGES / "2.enhanced" / "crab_4x.png"),
         Path(IMAGES / "2.enhanced" / "scarab_4x.png"),
     ],
-) 
+)
 def test_quantize(imagepath: Path):
 
     n_colors = 4
@@ -56,7 +56,7 @@ def test_quantize(imagepath: Path):
         Path(IMAGES / "2.enhanced" / "crab_4x.png"),
         Path(IMAGES / "2.enhanced" / "scarab_4x.png"),
     ],
-) 
+)
 def test_quantize_to_palette(imagepath: Path):
 
     root = imagepath.stem
@@ -77,7 +77,7 @@ def test_quantize_to_palette(imagepath: Path):
     [
         Path(IMAGES / "2.enhanced" / "scarab_4x.png"),
     ],
-) 
+)
 def test_monocolor(imagepath: Path):
 
     root = imagepath.stem
@@ -95,7 +95,7 @@ def test_monocolor(imagepath: Path):
     [
         Path(IMAGES / "4.layered"),
     ],
-) 
+)
 def test_compute_drawing_lines(imagepath: Path):
 
         layers = [cv2.imread(image.as_posix()) for image in imagepath.glob("*.png")]
@@ -119,15 +119,16 @@ def test_compute_drawing_lines(imagepath: Path):
 @pytest.mark.parametrize(
     "imagepath",
     [
-        Path(IMAGES / "4.layered"),
+        Path(IMAGES / "3.quantized"),
     ],
-) 
+)
 def test_conversion(imagepath: Path):
 
-    layers = [image.as_posix() for image in imagepath.glob("*.png")]
-    for i, layer in enumerate(layers):
-        processor = ImageProcessor(layer)
-        processor.export_svg(filename=layer, output_file=(IMAGES / "6.converted" / f"crab_layer_{i}.svg"))
+    imagepath = [image for image in imagepath.glob("*.png")]
+    for i, image in enumerate(imagepath):
+        processor = ImageProcessor(image)
+        root = Path(image).stem
+        processor.export_svg(filename=image, output_file=(IMAGES / "6.converted" / f"{root}.svg"))
 
 def test_svg_optimization():
 
@@ -161,10 +162,10 @@ class CustomInterface(interfaces.Gcode):
 
 
 def test_svg_to_gcode():
-     
+
     gcode_compiler = Compiler(CustomInterface, movement_speed=1000, cutting_speed=300, pass_depth=5)
 
     curves = parse_file((IMAGES / "6.converted" / "crab_layer_0.svg").as_posix())
 
-    gcode_compiler.append_curves(curves) 
+    gcode_compiler.append_curves(curves)
     gcode_compiler.compile_to_file("drawing.gcode", passes=2)

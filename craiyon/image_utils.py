@@ -7,7 +7,7 @@ from pathlib import Path
 import logging
 import colorsys
 from baffi.decorators.log_helpers import timeit
-from potrace import Bitmap, POTRACE_TURNPOLICY_MINORITY
+from potrace import Bitmap
 from svgpathtools import svg2paths, smoothed_path, wsvg
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ class Color:
             cls.brown,
             cls.black,
         ]
-    
+
 class ImageTransformer:
     @classmethod
     def enhance(cls, image, scale=4, output_file: Path = None):
@@ -338,43 +338,45 @@ class ImageProcessor:
 
         return image
 
-    def export_svg(self, filename: str, output_file: Path):
+    def export_svg(self, filename: Path, output_file: Path):
 
-        try:
-            image = Image.open(filename)
-        except IOError:
-            print("Image (%s) could not be loaded." % filename)
-            return
-        bm = Bitmap(image, blacklevel=1)
-        # bm.invert()
-        plist = bm.trace(
+        # Read image in grayscale
+        image = cv2.imread(filename.as_posix(), cv2.IMREAD_GRAYSCALE)
+        height, width = image.shape
+
+        # Binarize the image
+        _, binary = cv2.threshold(image, 128, 255, cv2.THRESH_BINARY)
+        binary = binary // 255
+        # Invert colors: potrace assumes 1 is black, 0 is white
+        binary = 1 - binary
+
+        bm = Bitmap(binary)
+        path = bm.trace(
             turdsize=2,
-            turnpolicy=POTRACE_TURNPOLICY_MINORITY,
             alphamax=1,
             opticurve=False,
             opttolerance=0.2,
         )
         with open(output_file.as_posix(), "w") as fp:
-            fp.write(
-                f'''<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{image.width}" height="{image.height}" viewBox="0 0 {image.width} {image.height}">''')
             parts = []
-            for curve in plist:
+            fp.write(SVG.header(width, height))
+            for curve in path.curves:
                 fs = curve.start_point
-                parts.append(f"M{fs.x},{fs.y}")
+                parts.append(f"M{fs[0]},{fs[1]}")
                 for segment in curve.segments:
                     if segment.is_corner:
                         a = segment.c
                         b = segment.end_point
-                        parts.append(f"L{a.x},{a.y}L{b.x},{b.y}")
+                        parts.append(f"L{a[0]},{a[1]}L{b[0]},{b[1]}")
                     else:
                         a = segment.c1
                         b = segment.c2
                         c = segment.end_point
-                        parts.append(f"C{a.x},{a.y} {b.x},{b.y} {c.x},{c.y}")
+                        parts.append(f"C{a[0]},{a[1]} {b[0]},{b[1]} {c[0]},{c[1]}")
                 parts.append("z")
             fp.write(f'<path stroke="none" fill="black" fill-rule="evenodd" d="{"".join(parts)}"/>')
             fp.write("</svg>")
-        logger.info(f"SVG saved to {filename}.svg")
+        logger.info(f"SVG saved to {filename}")
 
     def optimize_svg(self, input_file: Path, output_file: Path):
         """
@@ -390,4 +392,7 @@ class ImageProcessor:
         wsvg(smoothed_paths, filename=output_file.as_posix())
 
 
+class SVG:
 
+    def header(width: int, height: int):
+        return f'''<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'''

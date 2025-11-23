@@ -11,6 +11,18 @@ from svg_to_gcode.formulas import linear_map
 import numpy as np
 
 IMAGES = Path(__file__).parent.parent / "images"
+import logging
+
+@pytest.fixture(autouse=True)
+def setup_logger():
+    # Configure root logger
+    logging.basicConfig(
+        level=logging.DEBUG,  # Capture all levels
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logging.getLogger().info("Logging initialized for test session.")
+    yield
+    logging.getLogger().info("Test session finished.")
 
 @pytest.mark.parametrize(
     "imagepath",
@@ -67,7 +79,6 @@ def test_quantize_to_palette(imagepath: Path):
     palette_bgr = np.array(Color.stabilo_88() + [Color.white], dtype=np.uint8)
     palette_bgr = np.array([Color.white, Color.black, Color.blue], dtype=np.uint8)
 
-
     quantized = ImageTransformer.quantize_to_palette(img, palette_bgr)
 
     cv2.imwrite((IMAGES / "3.quantized" / f"{root}_palette.png").as_posix(), quantized)
@@ -119,7 +130,8 @@ def test_compute_drawing_lines(imagepath: Path):
 @pytest.mark.parametrize(
     "imagepath",
     [
-        Path(IMAGES / "3.quantized"),
+        # Path(IMAGES / "3.quantized" / "crab"),
+        Path(IMAGES / "3.quantized" / "scarab"),
     ],
 )
 def test_conversion(imagepath: Path):
@@ -128,17 +140,8 @@ def test_conversion(imagepath: Path):
     for i, image in enumerate(imagepath):
         processor = ImageProcessor(image)
         root = Path(image).stem
-        processor.export_svg(filename=image, output_file=(IMAGES / "6.converted" / f"{root}.svg"))
-
-def test_svg_optimization():
-
-    assert False, "Not working"
-
-    input_file = IMAGES / "6.converted" / "crab_layer_0.svg"
-    output_file = IMAGES / "7.optimized" / "crab_layer_0_optimized.svg"
-
-    processor = ImageProcessor(None)
-    processor.optimize_svg(input_file=input_file, output_file=output_file)
+        case = root.split("_")[0]
+        processor.export_svg(filename=image, output_file=(IMAGES / "6.converted" / f"{case}" / f"{root}.svg"), turdsize=20)
 
 
 class CustomInterface(interfaces.Gcode):
@@ -159,13 +162,18 @@ class CustomInterface(interfaces.Gcode):
         return f"M106 S255\n" + f"M3 S{linear_map(0, 255, power)};"  # Turn on the fan + change laser power
 
     # Add pen up/down methods
-
-
-def test_svg_to_gcode():
-
+@pytest.mark.parametrize(
+    "image",
+    [
+       IMAGES / "6.converted" / "scarab" / "scarab_4x_monocolor.svg"
+    ],
+)
+def test_svg_to_gcode(image:Path):
+    """
+    Test svg to gcode conversion with custom interface (experimental)
+    """
     gcode_compiler = Compiler(CustomInterface, movement_speed=1000, cutting_speed=300, pass_depth=5)
-
-    curves = parse_file((IMAGES / "6.converted" / "crab_layer_0.svg").as_posix())
-
+    curves = parse_file(image.as_posix())
+    root = image.stem
     gcode_compiler.append_curves(curves)
-    gcode_compiler.compile_to_file("drawing.gcode", passes=2)
+    gcode_compiler.compile_to_file((IMAGES / "7.gcode" / f"{root}.gcode").as_posix(), passes=1)

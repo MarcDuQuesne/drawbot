@@ -9,6 +9,7 @@ import colorsys
 from baffi.decorators.log_helpers import timeit
 from potrace import Bitmap
 from svgpathtools import svg2paths, smoothed_path, wsvg
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -338,28 +339,28 @@ class ImageProcessor:
 
         return image
 
-    def export_svg(self, filename: Path, output_file: Path):
+    def export_svg(self, filename: Path, output_file: Path, turdsize: Optional[int] = None, alphamax=1, opticurve=True, opttolerance=0.2):
 
         # Read image in grayscale
         image = cv2.imread(filename.as_posix(), cv2.IMREAD_GRAYSCALE)
         height, width = image.shape
 
-        # Binarize the image
-        _, binary = cv2.threshold(image, 128, 255, cv2.THRESH_BINARY)
-        binary = binary // 255
-        # Invert colors: potrace assumes 1 is black, 0 is white
-        binary = 1 - binary
+        if turdsize is None:
+            turdsize = max(min(width, height) // 100, 2)
 
-        bm = Bitmap(binary)
+        logger.info(f'Reading image {filename} of size {width}x{height} for SVG conversion.')
+        logger.debug(f"turdsize={turdsize}, alphamax={alphamax}, opticurve={opticurve}, opttolerance={opttolerance}")
+        bm = Bitmap(image < 128)
         path = bm.trace(
-            turdsize=2,
-            alphamax=1,
-            opticurve=False,
-            opttolerance=0.2,
+            turdsize=turdsize,
+            alphamax=alphamax,
+            opticurve=opticurve,
+            opttolerance=opttolerance,
         )
         with open(output_file.as_posix(), "w") as fp:
             parts = []
             fp.write(SVG.header(width, height))
+            logger.debug(f"Number of paths: {len(path.curves)}")
             for curve in path.curves:
                 fs = curve.start_point
                 parts.append(f"M{fs[0]},{fs[1]}")

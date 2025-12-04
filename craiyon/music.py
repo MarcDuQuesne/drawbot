@@ -11,7 +11,7 @@ from scipy.io import wavfile
 import logging
 from pathlib import Path
 
-from typing import Dict, List, Sequence, Optional, Tuple
+from typing import Dict, List, Sequence, Optional, Tuple, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +98,24 @@ class Scale:
         sample_rate: int = SAMPLE_RATE,
         amplitude: float = 4096.0,
     ) -> np.ndarray:
-        """Generate a sine wave for the given frequency and duration.
-
-        Returns:
-            A numpy array containing the waveform samples.
-        """
-        t = np.linspace(0, duration, int(sample_rate * duration))  # Time axis
+        """Generate a sine wave with ADSR envelope."""
+        t = np.linspace(0, duration, int(sample_rate * duration))
         wave = amplitude * np.sin(2 * np.pi * frequency * t)
-        return wave
+        
+        # ADSR envelope
+        attack_time = duration * 0.1
+        decay_time = duration * 0.15
+        release_time = duration * 0.2
+        
+        envelope = np.ones_like(t)
+        attack_samples = int(attack_time * sample_rate)
+        decay_samples = int(decay_time * sample_rate)
+        release_samples = int(release_time * sample_rate)
+        
+        envelope[:attack_samples] = np.linspace(0, 1, attack_samples)
+        envelope[-release_samples:] = np.linspace(1, 0, release_samples)
+        
+        return wave * envelope
 
 
 class Img2Song:
@@ -168,6 +178,7 @@ class Img2Song:
         octaves: Sequence[float] = [0.5,1,2,4],
         harmonize: str = "M3",
         harmonize_octave: float = 0.5,
+        sampling: Literal["random", "normal"] = "random",
     ) -> np.ndarray:
         """
         Transform sampled pixels from the image into a 2D numpy array of audio samples.
@@ -191,9 +202,23 @@ class Img2Song:
         if octaves is None:
             octaves = [0.5, 1, 2, 4]
 
-        hsv = self.hsv.reshape((-1, 3))
-        # Use the flattened hsv length for correct random sampling
-        random_pixels = hsv[np.random.choice(hsv.shape[0],nPixels, replace=False)]
+        if sampling == "random":
+            # Sample pixels randomly from the entire image
+            hsv = self.hsv.reshape((-1, 3))
+            # Use the flattened hsv length for correct random sampling
+            random_pixels = hsv[np.random.choice(hsv.shape[0],nPixels, replace=False)]
+        if sampling == "edge":
+            # Sample pixels only on edges
+            edges = cv2.Canny(cv2.cvtColor(self.hsv, cv2.COLOR_HSV2BGR), 100, 200)
+            edge_pixels = np.argwhere(edges > 0)
+            selected_indices = np.random.choice(len(edge_pixels), nPixels, replace=False)
+            random_pixels = self.hsv[edge_pixels[selected_indices, 0], edge_pixels[selected_indices, 1]]
+        if sampling == "center":
+            h, w = self.hsv.shape[:2]
+            y_coords = np.random.normal(h//2, h//6, nPixels).astype(int).clip(0, h-1)
+            x_coords = np.random.normal(w//2, w//6, nPixels).astype(int).clip(0, w-1)
+            random_pixels = self.hsv[y_coords, x_coords]
+
         h = random_pixels[:, 0]
         s = random_pixels[:, 1]
         v = random_pixels[:, 2]
@@ -202,19 +227,19 @@ class Img2Song:
             h.min(), h.max(), len(scale.frequencies), endpoint=False
         )
         self.HUE2FREQ = {
-            float(color): float(frequency)
+            color: frequency
             for color, frequency in zip(hue_frequency, scale.frequencies)
         }
         hue_durations = np.linspace(
             s.min(), s.max(), len(note_varation_duration), endpoint=False
         )
         self.HUE2DURATION = {
-            float(color): float(duration)
+            color: duration
             for color, duration in zip(hue_durations, note_varation_duration)
         }
         hue_octave = np.linspace(v.min(), v.max(), len(octaves), endpoint=False)
         self.HUE2OCTAVE = {
-            float(color): float(octave) for color, octave in zip(hue_octave, octaves)
+            color: octave for color, octave in zip(hue_octave, octaves)
         }
 
         frequencies = np.vectorize(
@@ -246,7 +271,7 @@ class Img2Song:
             return note, harmony_notes
 
         channels = zip(
-            *map(sample, frequencies, durations, octaves)
+            *map(sample, frequencies, durations, octaves_mapped)
         )  # The first one is the song, the rest are harmonics
         combined = np.vstack([np.array(channel).flatten() for channel in channels]).T
         return combined
@@ -259,11 +284,12 @@ if __name__ == "__main__":
     image = IMAGES / "1.original" / "crab.png"
 
     combined = Img2Song(image_filename=image.as_posix()).transform(
-        scale=Scale(octave=1, key="D"),
+        scale=Scale(octave=3, key="D"),
         harmonize="M3",
         sample_rate=SAMPLE_RATE,
-        nPixels=1240,
-        note_base_duration=0.25,
+        nPixels=124,
+        note_base_duration=0.3,
+        sampling="center",
     )
 
     wavfile.write(f"{image.stem}.wav", rate=SAMPLE_RATE, data=combined.astype(np.float32))

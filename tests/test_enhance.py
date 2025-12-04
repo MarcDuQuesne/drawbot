@@ -10,7 +10,8 @@ from svg_to_gcode.compiler import Compiler, interfaces
 from svg_to_gcode.formulas import linear_map
 import numpy as np 
 
-IMAGES = Path(__file__).parent.parent / "images"
+from conftest import IMAGES
+
 
 @pytest.mark.parametrize(
     "imagepath",

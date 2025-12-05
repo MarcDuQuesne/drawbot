@@ -23,3 +23,9 @@ test = [
 
 [tool.uv.sources]
 baffi = { git = "https://github.com/MarcDuQuesne/baffi.git" }
+
+[tool.pytest]
+log_cli = true
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli_format = "%(asctime)s %(levelname)s %(message)s"
+log_cli_level = "DEBUG"

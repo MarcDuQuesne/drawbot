@@ -9,11 +9,36 @@ from pathlib import Path
 import logging
 import matplotlib.pyplot as plt
 from typing import Literal
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import gaussian_filter
 from scipy.interpolate import splprep, splev
 logger = logging.getLogger(__name__)
 
 
+class Pipeline:
+    """
+    A simple pipeline to chain multiple processing steps.
+    """
+
+    def __init__(self, *filters):
+        self.filters = filters
+
+    def __call__(self, items):
+        for flt in self.filters:
+            items = flt(items)
+        return list(items)
+
+class CountourFilter:
+    """
+    Filter contours.
+    """ 
+    def __init__(self, criteria: callable):
+        self.criteria = criteria
+
+    def __call__(self, contour_levels):
+            for level_idx, (level, contours) in enumerate(contour_levels):
+                filtered_contours = [cnt for cnt in contours if self.criteria(cnt)]
+                logger.debug(f"Level {level:.1f}: {len(contours)} -> {len(filtered_contours)} f{self.criteria.__name__} contours after filtering.")
+                yield (level, filtered_contours)
 
 class HSVContourMapper:
     """
@@ -75,32 +100,6 @@ class HSVContourMapper:
         
         return contour_levels
     
-
-    
-    def generate_contour_map(self, output_file: Path, dimension='V', num_levels=5, method: Literal['opencv', 'matplotlib'] = 'opencv'):
-        """
-        Generate contour map with choice of algorithm.
-        
-        Args:
-            output_file: Path to save SVG
-            dimension: 'H', 'S', or 'V' (which HSV dimension determines height)
-            num_levels: Number of contour levels
-            method: 'opencv' or 'matplotlib' - which contour algorithm to use
-        """
-        if method not in ['opencv', 'matplotlib']:
-            raise ValueError(f"Method must be 'opencv' or 'matplotlib', got {method}")
-        
-        height_matrix = self.create_height_matrix(dimension)
-        
-        if method == 'opencv':
-            contour_levels = self.compute_contours_from_height(height_matrix, num_levels)
-            self.export_contours_svg(contour_levels, output_file)
-            logger.info(f"Contour map generated using OpenCV with HSV {dimension} dimension and {num_levels} levels.")
-        else:  # matplotlib
-            contour_levels = self.compute_contours_matplotlib(height_matrix, num_levels)
-            self.export_contours_svg(contour_levels, output_file)
-            logger.info(f"Contour map generated using matplotlib with HSV {dimension} dimension and {num_levels} levels.")
-    
     def compute_contours_matplotlib(self, height_matrix, num_levels=10):
         """
         Compute contour lines using matplotlib's contour algorithm.
@@ -136,21 +135,29 @@ class HSVContourMapper:
         plt.close(fig)
         return contours_per_level
     
-   
-    def generate_contour_map_matplotlib(self, output_file: Path, dimension='V', num_levels=5):
+    def generate_contour_map(self, dimension='V', num_levels=5, method: Literal['opencv', 'matplotlib'] = 'opencv'):
         """
-        Generate contour map using matplotlib algorithm.
+        Generate contour map with choice of algorithm.
         
         Args:
             output_file: Path to save SVG
             dimension: 'H', 'S', or 'V' (which HSV dimension determines height)
             num_levels: Number of contour levels
+            method: 'opencv' or 'matplotlib' - which contour algorithm to use
         """
+        if method not in ['opencv', 'matplotlib']:
+            raise ValueError(f"Method must be 'opencv' or 'matplotlib', got {method}")
+        
         height_matrix = self.create_height_matrix(dimension)
-        contour_levels = self.compute_contours_matplotlib(height_matrix, num_levels)
-        self.export_contours_svg(contour_levels, output_file)
-        logger.info(f"Matplotlib contour map generated using HSV {dimension} dimension with {num_levels} levels.")
+        
+        if method == 'opencv':
+            contour_levels = self.compute_contours_from_height(height_matrix, num_levels)
+            logger.info(f"Contour map generated using OpenCV with HSV {dimension} dimension and {num_levels} levels.")
+        else:  # matplotlib
+            contour_levels = self.compute_contours_matplotlib(height_matrix, num_levels)
+            logger.info(f"Contour map generated using matplotlib with HSV {dimension} dimension and {num_levels} levels.")
 
+        return contour_levels
 
     def smoothen_contours(self, contour, sigma=1.0):
         """
@@ -196,14 +203,43 @@ class HSVContourMapper:
 
         return np.asarray(res_array, dtype=np.int32)
 
-    def area_of_contour(self, contour):
+    def optimize_order_contours(self, contour_levels):
         """
-        Calculate the area of a contour safely. Handles empty / various shapes and dtypes.
-        Returns 0.0 for empty or invalid contours.
+        Optimize the order of contours to minimize travel distance.
+        
+        Args:
+            contour_levels: List of (level, contours) tuples
+        
+        Returns:
+            Optimized list of (level, contours) tuples
         """
-        return cv2.contourArea(contour.astype(np.float32))
-    
-    def export_contours_svg(self, contour_levels, output_file: Path, stroke_width=1):
+        optimized_levels = []
+        
+        for level, contours in contour_levels:
+            if not contours:
+                optimized_levels.append((level, contours))
+                continue
+            
+            ordered = [contours[0]]
+            remaining = contours[1:]
+            
+            current_point = ordered[-1][-1]  # End point of the last added contour
+            
+            while remaining:
+                # Find the closest contour start point
+                distances = [np.linalg.norm(current_point - cnt[0]) for cnt in remaining]
+                min_idx = np.argmin(distances)
+                
+                next_contour = remaining.pop(min_idx)
+                ordered.append(next_contour)
+                current_point = ordered[-1][-1]
+            
+            optimized_levels.append((level, ordered))
+            logger.info(f"Optimized order of {len(contours)} contours at level {level:.1f}.")
+        
+        return optimized_levels
+
+    def export_contours_svg(self, contour_levels, output_file: Path, stroke_width: int = 1):
         """
         Export contour lines as SVG, with different opacity/color for different levels.
         
@@ -213,26 +249,23 @@ class HSVContourMapper:
             stroke_width: Width of contour lines in SVG
         """
         h, w = self.hsv_image.shape[:2]
-        
+
+        # Minimize travel distance by optimizing contour order, per level.
+        contour_levels = self.optimize_order_contours(contour_levels)
+
         with open(output_file.as_posix(), "w") as fp:
             fp.write(f'''<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">''')
             fp.write(f'<rect width="{w}" height="{h}" fill="white"/>\n')
-            
+
             for level_idx, (level, contours) in enumerate(contour_levels):
                 # Vary opacity based on level (higher levels more opaque)
-                opacity = 0.3 + (level_idx / len(contour_levels)) * 0.7
+                # opacity = 0.3 + (level_idx / len(contour_levels)) * 0.7
+                opacity = 1
                 # Vary color from light to dark
                 gray_value = int(50 + (level_idx / len(contour_levels)) * 200)
                 color = f"rgb({gray_value},{gray_value},{gray_value})"
                 
                 for contour in contours:
-                    if len(contour) < 2:
-                        continue
-                    
-                    if self.area_of_contour(contour) < 10:
-                        continue  # skip tiny contours
-                    # contour = self.smoothen_contours(contour)
-
                     # Build SVG path from contour points
                     path_parts = []
                     for i, point in enumerate(contour):

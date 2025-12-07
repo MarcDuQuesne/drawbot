@@ -46,11 +46,16 @@ class HSVContourMapper:
     similar to a topographic map where elevation is determined by H, S, or V values.
     """
     
-    def __init__(self, image):
+    def __init__(self, image,blur: bool = True):
         if isinstance(image, Path) or isinstance(image, str):
             logger.info(f"Reading {image}.")
             image = cv2.imread(image)
         
+
+        if blur:
+            logger.info("Applying Gaussian blur to the image.")
+            image = cv2.GaussianBlur(image, (5, 5), 0)
+
         self.image = image
         self.hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
         logger.info("Image converted to HSV color space.")
